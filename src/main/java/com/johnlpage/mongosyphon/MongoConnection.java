@@ -1,10 +1,13 @@
 package com.johnlpage.mongosyphon;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
+import org.bson.BsonBinarySubType;
 import org.bson.Document;
+import org.bson.UuidRepresentation;
+import org.bson.internal.UuidHelper;
+import org.bson.types.Binary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -242,11 +245,17 @@ public class MongoConnection implements IDataSource {
 
 		String databaseName = mongoQLDoc.getString("database");
 		String collectionName = mongoQLDoc.getString("collection");
+
+		String uuidType = mongoQLDoc.getString("uuidRepresentation");
+		UuidRepresentation uuidRepresentation = Optional.ofNullable(uuidType).map(UuidRepresentation::valueOf).orElse(UuidRepresentation.STANDARD);
+
 		MongoCollection<Document> collection = mongoClient
 				.getDatabase(databaseName).getCollection(collectionName);
 
+		convertUuid(parameterised, uuidRepresentation);
+
 		if (find != null) {
-			FindIterable<Document> fi = collection.find(parameterised);
+			FindIterable<Document> fi = collection.find( parameterised);
 			if (projection != null) {
 				fi = fi.projection(projection);
 			}
@@ -261,6 +270,51 @@ public class MongoConnection implements IDataSource {
 			// Aggregation
 			results = collection.aggregate(aggregate).iterator();
 		}
+	}
+
+	public static void convertUuid(Document doc, UuidRepresentation representation ) {
+
+		for (String key : doc.keySet()) {
+			Object o = doc.get(key);
+
+			if (o instanceof Document) {
+				convertUuid((Document) o, representation );
+			}
+
+			if (o instanceof UUID) {
+				UUID uuid = (UUID) o;
+				doc.put(key,   uuidToBinary(uuid,representation));
+			}
+
+			if (o instanceof List) {
+				@SuppressWarnings("unchecked")
+				List<Object> array = (List<Object>) o;
+				if (array.isEmpty()) {
+					continue;
+				}
+
+				if (array.get(0) instanceof UUID){
+					doc.put(key, array
+							.stream()
+							.map(id-> uuidToBinary((UUID)id, representation)).collect(Collectors.toList()));
+				} else {
+					for (Object arrObj : array) {
+						if (arrObj instanceof Document) {
+							convertUuid((Document) arrObj, representation);
+						}
+					}
+				}
+
+			}
+		}
+
+	}
+
+	private static Object uuidToBinary(UUID uuid, UuidRepresentation representation) {
+		return new Binary(
+				representation != UuidRepresentation.STANDARD ?  BsonBinarySubType.UUID_LEGACY : BsonBinarySubType.UUID_STANDARD,
+				UuidHelper.encodeUuidToBinary(uuid, representation)
+		);
 	}
 
 	/*
